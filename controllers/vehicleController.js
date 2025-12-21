@@ -5,6 +5,7 @@ const User = require('../models/User');
 const Joi = require('joi');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+
 let createNotification, sendNotificationEmail;
 try {
   const helpers = require('../utils/helpers');
@@ -15,6 +16,7 @@ try {
   createNotification = async () => ({ _id: 'mock' });
   sendNotificationEmail = async () => {};
 }
+
 const razorpayInstance = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
@@ -23,15 +25,19 @@ const razorpayInstance = new Razorpay({
 const createVehicle = async (req, res) => {
   try {
     const { registrationNumber, chassisNumber, model, insurancePolicy, vehicleImage, feature1, feature2, feature3, customerId, insuranceAmount } = req.body;
+
     let ownerId;
+
     if (req.user.role === 'staff' && customerId) {
       ownerId = customerId;
+      
       if (!chassisNumber) {
         return res.status(400).json({
           success: false,
           message: 'Chassis number is required when creating vehicle for customer'
         });
       }
+
       const staffSchema = Joi.object({
         registrationNumber: Joi.string().required().trim().min(1),
         chassisNumber: Joi.string().required().trim().min(1),
@@ -43,6 +49,7 @@ const createVehicle = async (req, res) => {
         feature2: Joi.string().optional().trim().max(100),
         feature3: Joi.string().optional().trim().max(100)
       });
+
       const { error } = staffSchema.validate({
         registrationNumber,
         chassisNumber,
@@ -54,6 +61,7 @@ const createVehicle = async (req, res) => {
         feature2: feature2 || '',
         feature3: feature3 || ''
       });
+
       if (error) {
         return res.status(400).json({
           success: false,
@@ -61,17 +69,21 @@ const createVehicle = async (req, res) => {
         });
       }
     } else {
+      // Customer creating their own vehicle
       ownerId = req.user.id;
+
       const customerSchema = Joi.object({
         registrationNumber: Joi.string().required().trim().min(1),
         model: Joi.string().required().trim().max(100),
         vehicleImage: Joi.string().optional().uri().allow('')
       });
+
       const { error } = customerSchema.validate({
         registrationNumber,
         model,
         vehicleImage: vehicleImage || ''
       });
+
       if (error) {
         return res.status(400).json({
           success: false,
@@ -79,25 +91,38 @@ const createVehicle = async (req, res) => {
         });
       }
     }
-    let chassisToUse = chassisNumber ? chassisNumber.toUpperCase() : null;
-    let orConditions = [{ registrationNumber: registrationNumber.toUpperCase() }];
-    if (chassisToUse) {
-      orConditions.push({ chassisNumber: chassisToUse });
-    }
-    const vehicleExists = await Vehicle.findOne({
+
+    // Check for duplicate registration number
+    const regExists = await Vehicle.findOne({
       ownerId,
-      $or: orConditions
+      registrationNumber: registrationNumber.toUpperCase()
     });
-    if (vehicleExists) {
+
+    if (regExists) {
       return res.status(400).json({
         success: false,
-        message: 'Vehicle with this registration or chassis number already exists for this owner'
+        message: 'Vehicle with this registration number already exists for this owner'
       });
     }
+
+    // Check for duplicate chassis number (only if chassis is provided)
+    if (chassisNumber) {
+      const chassisExists = await Vehicle.findOne({
+        chassisNumber: chassisNumber.toUpperCase()
+      });
+
+      if (chassisExists) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vehicle with this chassis number already exists'
+        });
+      }
+    }
+
     const vehicle = new Vehicle({
       ownerId,
       registrationNumber: registrationNumber.toUpperCase(),
-      chassisNumber: chassisToUse,
+      chassisNumber: chassisNumber ? chassisNumber.toUpperCase() : null,
       model,
       insurancePolicy: req.user.role === 'staff' ? (insurancePolicy || '') : '',
       insuranceAmount: req.user.role === 'staff' && insuranceAmount ? parseFloat(insuranceAmount) : null,
@@ -108,6 +133,7 @@ const createVehicle = async (req, res) => {
       createdBy: req.user.id,
       paymentStatus: 'pending'
     });
+
     await vehicle.save();
     await vehicle.populate('ownerId', 'name email mobile');
     await vehicle.populate('createdBy', 'name role');
@@ -126,6 +152,7 @@ const createVehicle = async (req, res) => {
             registrationNumber: vehicle.registrationNumber
           }
         });
+
         await sendNotificationEmail({
           user: vehicle.ownerId,
           notification,
@@ -138,7 +165,9 @@ const createVehicle = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: req.user.role === 'customer' ? 'Vehicle created successfully. Chassis number, insurance policy, and insurance dates will be set by staff.' : 'Vehicle created successfully. Insurance dates will be set by staff.',
+      message: req.user.role === 'customer' 
+        ? 'Vehicle created successfully. Chassis number, insurance policy, and insurance dates will be set by staff.' 
+        : 'Vehicle created successfully. Insurance dates will be set by staff.',
       data: vehicle
     });
   } catch (error) {
@@ -154,7 +183,9 @@ const getMyVehicles = async (req, res) => {
   try {
     const { page = 1, limit = 10, search } = req.query;
     const skip = (page - 1) * limit;
+
     const query = { ownerId: req.user.id };
+
     if (search) {
       query.$or = [
         { registrationNumber: { $regex: search.toUpperCase(), $options: 'i' } },
@@ -162,6 +193,7 @@ const getMyVehicles = async (req, res) => {
         { model: { $regex: search, $options: 'i' } }
       ];
     }
+
     const vehicles = await Vehicle.find(query)
       .populate('ownerId', 'name email')
       .populate('insuranceSetBy', 'name')
@@ -169,6 +201,7 @@ const getMyVehicles = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
+
     const vehiclesWithInsurance = await Promise.all(vehicles.map(async (v) => {
       let insurance = null;
       try {
@@ -179,11 +212,14 @@ const getMyVehicles = async (req, res) => {
       } catch (err) {
         console.log('Insurance fetch error:', err.message);
       }
+
       const vehicleObj = v.toObject();
       vehicleObj.insurance = insurance;
       return vehicleObj;
     }));
+
     const total = await Vehicle.countDocuments(query);
+
     res.status(200).json({
       success: true,
       count: vehiclesWithInsurance.length,
@@ -205,7 +241,9 @@ const getAllVehicles = async (req, res) => {
   try {
     const { page = 1, limit = 10, search, chassisNo, regNo, customerId } = req.query;
     const skip = (page - 1) * limit;
+
     const query = {};
+
     if (search) {
       query.$or = [
         { registrationNumber: { $regex: search.toUpperCase(), $options: 'i' } },
@@ -213,15 +251,19 @@ const getAllVehicles = async (req, res) => {
         { model: { $regex: search, $options: 'i' } }
       ];
     }
+
     if (chassisNo) {
       query.chassisNumber = { $regex: chassisNo.toUpperCase(), $options: 'i' };
     }
+
     if (regNo) {
       query.registrationNumber = { $regex: regNo.toUpperCase(), $options: 'i' };
     }
+
     if (customerId) {
       query.ownerId = customerId;
     }
+
     const vehicles = await Vehicle.find(query)
       .populate('ownerId', 'name email mobile')
       .populate('insuranceSetBy', 'name')
@@ -229,7 +271,9 @@ const getAllVehicles = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
+
     const total = await Vehicle.countDocuments(query);
+
     res.status(200).json({
       success: true,
       count: vehicles.length,
@@ -250,17 +294,20 @@ const getAllVehicles = async (req, res) => {
 const getCustomerVehicles = async (req, res) => {
   try {
     const { customerId } = req.params;
+
     if (!customerId) {
       return res.status(400).json({
         success: false,
         message: 'Customer ID is required'
       });
     }
+
     let vehicles = await Vehicle.find({ ownerId: customerId })
       .populate('ownerId', 'name email mobile')
       .populate('insuranceSetBy', 'name')
       .populate('createdBy', 'name role')
       .sort({ createdAt: -1 });
+
     const vehiclesWithInsurance = await Promise.all(vehicles.map(async (v) => {
       let insurance = null;
       try {
@@ -271,10 +318,12 @@ const getCustomerVehicles = async (req, res) => {
       } catch (err) {
         console.log('Insurance fetch error:', err.message);
       }
+
       const vehicleObj = v.toObject();
       vehicleObj.insurance = insurance;
       return vehicleObj;
     }));
+
     res.status(200).json({
       success: true,
       count: vehiclesWithInsurance.length,
@@ -293,39 +342,47 @@ const setInsuranceDates = async (req, res) => {
   try {
     const { vehicleId } = req.params;
     const { startDate, expiryDate, insuranceAmount } = req.body;
+
     if (!startDate || !expiryDate) {
       return res.status(400).json({
         success: false,
         message: 'Both start date and expiry date are required'
       });
     }
+
     const start = new Date(startDate);
     const expiry = new Date(expiryDate);
+
     if (expiry <= start) {
       return res.status(400).json({
         success: false,
         message: 'Expiry date must be after start date'
       });
     }
+
     if (expiry <= new Date()) {
       return res.status(400).json({
         success: false,
         message: 'Expiry date must be in the future'
       });
     }
+
     if (insuranceAmount !== undefined && (isNaN(insuranceAmount) || parseFloat(insuranceAmount) < 0)) {
       return res.status(400).json({
         success: false,
         message: 'Insurance amount must be a valid non-negative number'
       });
     }
+
     const vehicle = await Vehicle.findById(vehicleId).populate('ownerId', 'name email mobile');
+
     if (!vehicle) {
       return res.status(404).json({
         success: false,
         message: 'Vehicle not found'
       });
     }
+
     const oldExpiryDate = vehicle.expiryDate;
     const oldInsuranceAmount = vehicle.insuranceAmount;
     const isAmountUpdated = insuranceAmount !== undefined && parseFloat(insuranceAmount) !== oldInsuranceAmount;
@@ -337,6 +394,7 @@ const setInsuranceDates = async (req, res) => {
     }
     vehicle.insuranceSetBy = req.user.id;
     vehicle.insuranceSetAt = new Date();
+
     await vehicle.save();
     await vehicle.populate('insuranceSetBy', 'name');
     await vehicle.populate('createdBy', 'name role');
@@ -345,6 +403,7 @@ const setInsuranceDates = async (req, res) => {
     const notificationMessage = oldExpiryDate
       ? `Insurance dates updated for your vehicle ${vehicle.registrationNumber}. New expiry: ${expiry.toDateString()}`
       : `Insurance dates set for your vehicle ${vehicle.registrationNumber}. Coverage starts: ${start.toDateString()}, Expires: ${expiry.toDateString()}`;
+
     try {
       const notification = await createNotification({
         userId: vehicle.ownerId._id,
@@ -357,6 +416,7 @@ const setInsuranceDates = async (req, res) => {
           expiryDate: expiry
         }
       });
+
       await sendNotificationEmail({
         user: vehicle.ownerId,
         notification,
@@ -383,6 +443,7 @@ const setInsuranceDates = async (req, res) => {
             expiryDate: expiry
           }
         });
+
         await sendNotificationEmail({
           user: vehicle.ownerId,
           notification,
@@ -411,6 +472,7 @@ const updateVehicle = async (req, res) => {
   try {
     const { id } = req.params;
     const { registrationNumber, chassisNumber, model, insurancePolicy, vehicleImage, feature1, feature2, feature3, insuranceAmount } = req.body;
+
     let query = { _id: id };
     if (req.user.role !== 'staff') {
       query.$or = [
@@ -418,20 +480,39 @@ const updateVehicle = async (req, res) => {
         { createdBy: req.user.id }
       ];
     }
+
     const vehicle = await Vehicle.findOne(query).populate('ownerId', 'name email mobile');
+
     if (!vehicle) {
       return res.status(404).json({
         success: false,
         message: 'Vehicle not found or not authorized'
       });
     }
+
     if (req.user.role === 'customer') {
       const restrictedFields = ['chassisNumber', 'insurancePolicy', 'feature1', 'feature2', 'feature3', 'insuranceAmount'];
       const restrictedUpdate = restrictedFields.some(field => req.body[field] !== undefined);
+
       if (restrictedUpdate) {
         return res.status(400).json({
           success: false,
           message: 'Chassis number, insurance policy, amount, and features can only be updated by staff'
+        });
+      }
+    }
+
+    // Check for chassis number uniqueness when updating (only if provided)
+    if (chassisNumber && req.user.role === 'staff') {
+      const chassisExists = await Vehicle.findOne({
+        _id: { $ne: id },
+        chassisNumber: chassisNumber.toUpperCase()
+      });
+
+      if (chassisExists) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vehicle with this chassis number already exists'
         });
       }
     }
@@ -473,6 +554,7 @@ const updateVehicle = async (req, res) => {
             model: updatedVehicle.model
           }
         });
+
         await sendNotificationEmail({
           user: updatedVehicle.ownerId,
           notification,
@@ -500,6 +582,7 @@ const updateVehicle = async (req, res) => {
 const deleteVehicle = async (req, res) => {
   try {
     const { id } = req.params;
+
     let query = { _id: id };
     if (req.user.role !== 'staff') {
       query.$or = [
@@ -507,14 +590,18 @@ const deleteVehicle = async (req, res) => {
         { createdBy: req.user.id }
       ];
     }
+
     const vehicle = await Vehicle.findOne(query);
+
     if (!vehicle) {
       return res.status(404).json({
         success: false,
         message: 'Vehicle not found or not authorized'
       });
     }
+
     await Vehicle.findByIdAndDelete(id);
+
     res.status(200).json({
       success: true,
       message: 'Vehicle deleted successfully'
@@ -532,6 +619,7 @@ const getRenewalQueue = async (req, res) => {
   try {
     const now = new Date();
     const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
     const vehicles = await Vehicle.find({
       expiryDate: {
         $gte: now,
@@ -544,6 +632,7 @@ const getRenewalQueue = async (req, res) => {
       .populate('createdBy', 'name role')
       .sort({ expiryDate: 1 })
       .limit(50);
+
     const filteredVehicles = vehicles
       .filter(v => v.ownerId && v.ownerId.accountStatus === 'active')
       .map(v => {
@@ -552,12 +641,14 @@ const getRenewalQueue = async (req, res) => {
         if (daysUntilExpiry <= 1) daysCategory = '1 Day';
         else if (daysUntilExpiry <= 7) daysCategory = '7 Days';
         else daysCategory = '30 Days';
+
         return {
           ...v.toObject(),
           daysUntilExpiry,
           daysCategory
         };
       });
+
     res.status(200).json({
       success: true,
       count: filteredVehicles.length,
@@ -575,9 +666,11 @@ const getRenewalQueue = async (req, res) => {
 const initiateInsurancePayment = async (req, res) => {
   try {
     const { vehicleId } = req.params;
+
     console.log('=== PAYMENT INITIATION STARTED ===');
     console.log('User ID:', req.user.id);
     console.log('Vehicle ID:', vehicleId);
+
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
       console.error('RAZORPAY CREDENTIALS MISSING!');
       return res.status(500).json({
@@ -585,6 +678,7 @@ const initiateInsurancePayment = async (req, res) => {
         message: 'Payment gateway not configured. Please contact administrator.'
       });
     }
+
     const vehicle = await Vehicle.findById(vehicleId).populate('ownerId', 'name email mobile');
    
     if (!vehicle) {
@@ -593,27 +687,32 @@ const initiateInsurancePayment = async (req, res) => {
         message: 'Vehicle not found'
       });
     }
+
     if (vehicle.ownerId._id.toString() !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to pay for this vehicle'
       });
     }
+
     if (!vehicle.insuranceAmount || vehicle.insuranceAmount <= 0) {
       return res.status(400).json({
         success: false,
         message: 'Insurance amount not set for this vehicle'
       });
     }
+
     if (vehicle.paymentStatus === 'paid') {
       return res.status(400).json({
         success: false,
         message: 'Insurance payment already completed for this vehicle'
       });
     }
+
     const amountInPaise = Math.round(vehicle.insuranceAmount * 100);
     const timestamp = Date.now();
     const shortReceipt = `INS_${timestamp.toString().slice(-8)}`;
+
     console.log('Creating Razorpay order with receipt:', shortReceipt);
    
     let razorpayOrder;
@@ -642,15 +741,19 @@ const initiateInsurancePayment = async (req, res) => {
         message: errorMessage
       });
     }
+
     if (!razorpayOrder || !razorpayOrder.id) {
       return res.status(500).json({
         success: false,
         message: 'Invalid response from payment gateway'
       });
     }
+
     vehicle.razorpayOrderId = razorpayOrder.id;
     await vehicle.save();
+
     console.log('=== PAYMENT INITIATION SUCCESS ===');
+
     res.status(200).json({
       success: true,
       message: 'Payment order created successfully',
@@ -680,16 +783,19 @@ const verifyInsurancePayment = async (req, res) => {
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
    
     console.log('=== PAYMENT VERIFICATION STARTED ===');
+
     if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
       return res.status(400).json({
         success: false,
         message: 'Missing payment verification parameters'
       });
     }
+
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${razorpayOrderId}|${razorpayPaymentId}`)
       .digest('hex');
+
     if (generatedSignature !== razorpaySignature) {
       console.error('SIGNATURE MISMATCH');
       return res.status(400).json({
@@ -697,6 +803,7 @@ const verifyInsurancePayment = async (req, res) => {
         message: 'Invalid payment signature'
       });
     }
+
     const vehicle = await Vehicle.findById(vehicleId).populate('ownerId', 'name email mobile');
    
     if (!vehicle) {
@@ -705,17 +812,20 @@ const verifyInsurancePayment = async (req, res) => {
         message: 'Vehicle not found'
       });
     }
+
     if (vehicle.ownerId._id.toString() !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized'
       });
     }
+
     vehicle.paymentStatus = 'paid';
     vehicle.razorpayPaymentId = razorpayPaymentId;
     vehicle.razorpaySignature = razorpaySignature;
     vehicle.paidAt = new Date();
     await vehicle.save();
+
     await vehicle.populate('insuranceSetBy', 'name');
     await vehicle.populate('createdBy', 'name role');
 
@@ -734,6 +844,7 @@ const verifyInsurancePayment = async (req, res) => {
           model: vehicle.model
         }
       });
+
       await sendNotificationEmail({
         user: vehicle.ownerId,
         notification: customerNotification,
@@ -763,6 +874,7 @@ const verifyInsurancePayment = async (req, res) => {
               model: vehicle.model
             }
           });
+
           await sendNotificationEmail({
             user: staffUser,
             notification: staffNotification,

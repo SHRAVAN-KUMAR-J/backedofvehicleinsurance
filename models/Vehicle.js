@@ -20,8 +20,8 @@ const vehicleSchema = new mongoose.Schema(
       required: false,
       uppercase: true,
       trim: true,
-      unique: true,
       sparse: true,
+      default: null,
     },
     model: {
       type: String,
@@ -105,8 +105,14 @@ const vehicleSchema = new mongoose.Schema(
   }
 );
 
+// Index on registration number (unique)
 vehicleSchema.index({ registrationNumber: 1 });
+
+// Index on chassis number (sparse allows multiple nulls)
 vehicleSchema.index({ chassisNumber: 1 }, { sparse: true });
+
+// Index on expiry date for renewal queue
 vehicleSchema.index({ expiryDate: 1 });
 
 module.exports = mongoose.model('Vehicle', vehicleSchema);
+
