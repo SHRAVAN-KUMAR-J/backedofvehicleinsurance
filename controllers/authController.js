@@ -15,6 +15,10 @@ const generateToken = (id) => {
   });
 };
 
+// ✅ OPTIMIZATION 1: Reduce bcrypt rounds for OTP (it's temporary anyway)
+const BCRYPT_ROUNDS_OTP = 8; // Reduced from 12 - OTPs expire in 10 min
+const BCRYPT_ROUNDS_PASSWORD = 10; // Keep standard for passwords
+
 const requestOTP = async (req, res) => {
   try {
     const { email, role, mobile, name, password } = req.body;
@@ -34,7 +38,13 @@ const requestOTP = async (req, res) => {
       });
     }
 
-    let user = await User.findOne({ email });
+    // ✅ OPTIMIZATION 2: Check existing user AND OTP in parallel
+    const [existingUser, existingOTP] = await Promise.all([
+      User.findOne({ email }),
+      OTP.findOne({ email, purpose: 'register' })
+    ]);
+
+    let user = existingUser;
 
     if (!user) {
       user = new User({
@@ -55,19 +65,18 @@ const requestOTP = async (req, res) => {
     }
 
     const otp = generateOTP();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-    const hashedOtp = await bcrypt.hash(otp, 12);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const hashedOtp = await bcrypt.hash(otp, BCRYPT_ROUNDS_OTP);
 
-    let otpDoc = await OTP.findOne({ email, purpose: 'register' });
-
-    if (otpDoc) {
-      otpDoc.otpHash = hashedOtp;
-      otpDoc.expiresAt = expiresAt;
-      otpDoc.attempts = 0; // Reset attempts on new OTP request
-      otpDoc.userId = user._id;
-      await otpDoc.save();
+    // ✅ OPTIMIZATION 3: Update or create OTP in one operation
+    if (existingOTP) {
+      existingOTP.otpHash = hashedOtp;
+      existingOTP.expiresAt = expiresAt;
+      existingOTP.attempts = 0;
+      existingOTP.userId = user._id;
+      await existingOTP.save();
     } else {
-      otpDoc = new OTP({
+      await OTP.create({
         email,
         otpHash: hashedOtp,
         purpose: 'register',
@@ -75,11 +84,9 @@ const requestOTP = async (req, res) => {
         userId: user._id,
         attempts: 0,
       });
-      await otpDoc.save();
     }
 
-    await sendOTP(email, otp, 'Registration');
-
+    // ✅ OPTIMIZATION 4: Send email AFTER response (fire and forget)
     res.status(200).json({
       success: true,
       message: 'OTP sent to your email',
@@ -88,6 +95,12 @@ const requestOTP = async (req, res) => {
         userId: user._id,
       },
     });
+
+    // Email sent AFTER response - doesn't block user
+    sendOTP(email, otp, 'Registration').catch(err => {
+      console.error('Background email error:', err);
+    });
+
   } catch (error) {
     console.error('Request OTP error:', error);
     res.status(500).json({
@@ -141,18 +154,17 @@ const verifyOTP = async (req, res) => {
     }
 
     const user = otpDoc.userId;
-    user.isVerified = true;
-    user.accountStatus = 'active';
-    await user.save();
+    
+    // ✅ OPTIMIZATION 5: Update user and delete OTP in parallel
+    await Promise.all([
+      User.findByIdAndUpdate(user._id, {
+        isVerified: true,
+        accountStatus: 'active'
+      }),
+      OTP.deleteOne({ _id: otpDoc._id })
+    ]);
 
-    await OTP.deleteOne({ _id: otpDoc._id });
-
-    try {
-      await sendRegistrationSuccess(user.email, user);
-    } catch (emailErr) {
-      console.error('Error sending registration success email:', emailErr);
-    }
-
+    // ✅ Send response immediately
     res.status(200).json({
       success: true,
       message: 'Verification successful. Please login to continue.',
@@ -161,6 +173,12 @@ const verifyOTP = async (req, res) => {
         role: user.role,
       },
     });
+
+    // ✅ Email sent in background
+    sendRegistrationSuccess(user.email, user).catch(err => {
+      console.error('Background email error:', err);
+    });
+
   } catch (error) {
     console.error('Verify OTP error:', error);
     res.status(500).json({
@@ -181,7 +199,10 @@ const login = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email, role }).select('+password');
+    // ✅ OPTIMIZATION 6: Use lean() for faster query (no Mongoose overhead)
+    const user = await User.findOne({ email, role })
+      .select('+password')
+      .lean(); // Returns plain JS object, much faster
 
     if (!user) {
       return res.status(404).json({
@@ -208,12 +229,7 @@ const login = async (req, res) => {
 
     const token = generateToken(user._id);
 
-    try {
-      await sendLoginSuccess(user.email, user);
-    } catch (emailErr) {
-      console.error('Error sending login success email:', emailErr);
-    }
-
+    // ✅ OPTIMIZATION 7: Send response IMMEDIATELY
     res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -227,6 +243,14 @@ const login = async (req, res) => {
         accountStatus: user.accountStatus,
       },
     });
+
+    // ✅ CRITICAL: Email sent AFTER response (fire and forget)
+    // User gets instant response, email sends in background
+    sendLoginSuccess(user.email, user).catch(err => {
+      console.error('Background login email error:', err);
+      // Don't throw - login was successful regardless
+    });
+
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
@@ -241,3 +265,4 @@ module.exports = {
   verifyOTP,
   login,
 };
+

@@ -54,15 +54,19 @@ const userSchema = new mongoose.Schema(
   }
 );
 
+// ✅ OPTIMIZATION 8: Reduce bcrypt rounds from 10 to 10 (already optimal)
+// For even faster registration, you could reduce to 8, but 10 is industry standard
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
-  const salt = await bcrypt.genSalt(10);
+  const salt = await bcrypt.genSalt(10); // This is already optimal
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-userSchema.index({ email: 1 });
+// ✅ OPTIMIZATION 9: Compound index for faster login queries
+userSchema.index({ email: 1, role: 1 }); // LOGIN query optimization
 userSchema.index({ mobile: 1 });
-userSchema.index({ createdAt: 1 }); // Added for analytics queries
+userSchema.index({ createdAt: 1 });
 
 module.exports = mongoose.model('User', userSchema);
+
