@@ -261,33 +261,39 @@ const sendNotificationEmail = async ({ user, notification, vehicle = null, insur
     // Reminder notifications
     else if (notification.type === 'reminder' && vehicle) {
       const isPostExpiry = notification.metadata?.postExpiry || notification.metadata?.reminderDays === -1;
-      const isPostStart = notification.metadata?.postStart || notification.metadata?.reminderDays === 365;
-      const startDate = notification.metadata?.startDate ? new Date(notification.metadata.startDate) : null;
+      const isPostStart = notification.metadata?.postStart || notification.metadata?.reminderDays === 1;
       const expiryDate = notification.metadata?.expiryDate ? new Date(notification.metadata.expiryDate) : vehicle.expiryDate;
-
+      
       if (isPostExpiry) {
-        subject = `⚠️ URGENT: Insurance Expired - ${vehicle.registrationNumber}`;
+        subject = `⚠️ URGENT: Insurance is about to Expire - ${vehicle.registrationNumber}`;
         htmlContent += `
           <div style="background: #fee; border-left: 4px solid #e74c3c; padding: 15px; margin-bottom: 20px;">
             <h3 style="color: #e74c3c; margin-top: 0;">⚠️ Insurance Expired - Immediate Action Required</h3>
           </div>
           <p style="color: #34495e;">Dear ${user.name},</p>
-          <p><strong style="color: #e74c3c;">Your vehicle insurance has EXPIRED!</strong></p>
+          <p><strong style="color: #e74c3c;">Your vehicle insurance will be EXPIRED!</strong></p>
           <p>Vehicle: <strong>${vehicle.registrationNumber}</strong></p>
           <p>Expiry Date: <strong>${expiryDate.toDateString()}</strong></p>
           <p style="background: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107;">
             <strong>Important:</strong> Driving without valid insurance is illegal and may result in fines, penalties, and legal consequences. Please renew your insurance immediately.
           </p>
           <p>Please visit our portal to renew your insurance as soon as possible.</p>
-          <p><a href="${process.env.FRONTEND_URL}" style="background: #e74c3c; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Renew Insurance Now</a></p>
+          <p><a href="${process.env.FRONTEND_URL}" style="background: #b91402ff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Renew Insurance Now</a></p>
         `;
       } else if (isPostStart) {
-        subject = `Insurance Started - ${vehicle.registrationNumber}`;
+        subject = `⏰ Reminder Activated Started Your Vehicle - ${vehicle.registrationNumber}`;
+        const vehicleStartDate = vehicle.startDate ? new Date(vehicle.startDate) : (notification.metadata?.startDate ? new Date(notification.metadata.startDate) : null);
         htmlContent += `
-          <h3 style="color: #27ae60;">${notification.title}</h3>
+          <div style="background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin-bottom: 20px;">
+            <h3 style="color: #2e7d32; margin-top: 0;">🔔 Insurance Reminder Activation Confirmation</h3>
+          </div>
           <p style="color: #34495e;">Dear ${user.name},</p>
-          <p>Your vehicle <strong>${vehicle.registrationNumber}</strong> insurance started on <strong>${startDate ? startDate.toDateString() : 'N/A'}</strong> and will expire on <strong>${expiryDate.toDateString()}</strong>.</p>
-          <p>Please note this renewal date to ensure continuous coverage next year.</p>
+          <p>Your vehicle <strong>${vehicle.model}</strong> (Registration No: <strong>${vehicle.registrationNumber}</strong>) insurance is now active and in good standing!</p>
+          <p><strong>Started on:</strong> ${vehicleStartDate ? vehicleStartDate.toDateString() : 'N/A'}</p>
+          <p style="color: #e74c3c; font-weight: bold;">Expires on: ${expiryDate.toDateString()}</p>
+          <div style="background: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107; color: #856404;">
+            <strong>Status: Good - One day has passed since activation!</strong> Please note the renewal date for continuous coverage next year.
+          </div>
           <p><a href="${process.env.FRONTEND_URL}" style="background: #27ae60; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">View Insurance Details</a></p>
         `;
       } else {
@@ -300,7 +306,7 @@ const sendNotificationEmail = async ({ user, notification, vehicle = null, insur
           <p><a href="${process.env.FRONTEND_URL}" style="background: #3498db; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Renew Insurance</a></p>
         `;
       }
-    } 
+    }
     // Generic update notifications
     else if (notification.type === 'update' && vehicle) {
       subject = `Insurance Update - ${vehicle.registrationNumber}`;
@@ -312,7 +318,7 @@ const sendNotificationEmail = async ({ user, notification, vehicle = null, insur
         ${expiryDate ? `<p>New expiry date: <strong>${expiryDate.toDateString()}</strong></p>` : ''}
         <p>Please keep this information for your records.</p>
       `;
-    } 
+    }
     // Default notification
     else {
       subject = notification.title;
@@ -322,24 +328,21 @@ const sendNotificationEmail = async ({ user, notification, vehicle = null, insur
         <p>${notification.message}</p>
       `;
     }
-
     htmlContent += `
           <img src="https://www.shutterstock.com/image-vector/car-insurance-policy-finance-form-600nw-1779897377.jpg" alt="Car Insurance" style="max-width: 100%; height: auto; margin-top: 20px;">
-          </div>
-          <div style="text-align: center; color: #7f8c8d; font-size: 12px; margin-top: 30px;">
-            <p><a href="${process.env.FRONTEND_URL}" style="color: #3498db;">Login to your portal</a></p>
-            <p>&copy; 2025 Vehicle Insurance System. All rights reserved.</p>
-          </div>
         </div>
-      `;
-
+        <div style="text-align: center; color: #7f8c8d; font-size: 12px; margin-top: 30px;">
+          <p><a href="${process.env.FRONTEND_URL}" style="color: #3498db;">Login to your portal</a></p>
+          <p>&copy; 2025 Vehicle Insurance System. All rights reserved.</p>
+        </div>
+      </div>
+    `;
     const mailOptions = {
       from: `"Vehicle Insurance System" <${process.env.EMAIL_USER}>`,
       to: user.email,
       subject,
       html: htmlContent,
     };
-
     await transporter.sendMail(mailOptions);
     console.log(`Notification email sent to ${user.email}`);
     return true;

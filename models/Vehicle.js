@@ -1,4 +1,3 @@
-// models/Vehicle.js
 const mongoose = require('mongoose');
 
 const vehicleSchema = new mongoose.Schema(
@@ -65,6 +64,30 @@ const vehicleSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    activationReminderScheduledAt: {
+      type: Date,
+      default: null,
+    },
+    activationReminderSent: {
+      type: Boolean,
+      default: false,
+    },
+    monthReminderScheduledAt: {
+      type: Date,
+      default: null,
+    },
+    monthReminderSent: {
+      type: Boolean,
+      default: false,
+    },
+    preExpiryReminderScheduledAt: {
+      type: Date,
+      default: null,
+    },
+    preExpiryReminderSent: {
+      type: Boolean,
+      default: false,
+    },
     insuranceSetBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -100,19 +123,33 @@ const vehicleSchema = new mongoose.Schema(
       default: null,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-// Index on registration number (unique)
+vehicleSchema.pre('save', function (next) {
+  if (this.isModified('startDate') && this.startDate && !this.activationReminderScheduledAt) {
+    this.activationReminderScheduledAt = new Date(this.startDate.getTime() + 24 * 60 * 60 * 1000);
+    console.log(`Scheduled activation reminder for ${this.registrationNumber} at ${this.activationReminderScheduledAt}`);
+  }
+  
+  if (this.isModified('startDate') && this.startDate && !this.monthReminderScheduledAt) {
+    this.monthReminderScheduledAt = new Date(this.startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+    console.log(`Scheduled month reminder for ${this.registrationNumber} at ${this.monthReminderScheduledAt}`);
+  }
+  
+  if (this.isModified('expiryDate') && this.expiryDate && !this.preExpiryReminderScheduledAt) {
+    this.preExpiryReminderScheduledAt = new Date(this.expiryDate.getTime() - 24 * 60 * 60 * 1000);
+    console.log(`Scheduled pre-expiry reminder for ${this.registrationNumber} at ${this.preExpiryReminderScheduledAt}`);
+  }
+  
+  next();
+});
+
 vehicleSchema.index({ registrationNumber: 1 });
-
-// Index on chassis number (sparse allows multiple nulls)
 vehicleSchema.index({ chassisNumber: 1 }, { sparse: true });
-
-// Index on expiry date for renewal queue
 vehicleSchema.index({ expiryDate: 1 });
+vehicleSchema.index({ activationReminderScheduledAt: 1 });
+vehicleSchema.index({ monthReminderScheduledAt: 1 });
+vehicleSchema.index({ preExpiryReminderScheduledAt: 1 });
 
 module.exports = mongoose.model('Vehicle', vehicleSchema);
-
